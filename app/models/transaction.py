@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import datetime
+from sqlalchemy.orm import relationship
 from sqlalchemy import (
     Column, String, BigInteger, Integer,
     DateTime, Float, Enum, JSON, Text
@@ -217,6 +218,11 @@ class Transaction(Base):
         nullable=True,
         default=dict
     )
+
+# Relationships — lets us do transaction.state_logs to get
+    # all audit entries for this transaction
+    state_logs = relationship("TransactionStateLog", back_populates="transaction", cascade="all, delete-orphan")
+    refunds = relationship("Refund", back_populates="transaction", cascade="all, delete-orphan")    
 
     def __repr__(self):
         """
