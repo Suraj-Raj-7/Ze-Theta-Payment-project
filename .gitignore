@@ -1,33 +1,51 @@
-# Virtual environment
+# Virtual environment - never commit this (200MB+)
 venv/
 .venv/
 
-# Environment variables (NEVER commit passwords to GitHub)
+# Environment variables - NEVER commit (contains passwords)
 .env
 
-# Python cache
+# Python cache - auto-generated, not needed in repo
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+.Python
 
-# Database
+# Database files - we use Docker, not local DB files
 *.db
 *.sqlite3
 
-# pytest cache
+# Alembic - only commit migrations/versions/, not cache
+migrations/__pycache__/
+
+# pytest cache - auto-generated during testing
 .pytest_cache/
 htmlcov/
 .coverage
+.coverage.*
 
-# VS Code
+# VS Code - editor settings, personal preference
 .vscode/
+*.code-workspace
 
-# Distribution
+# Distribution - not needed
 dist/
 build/
 *.egg-info/
 
-# Logs
+# Logs - generated at runtime
 *.log
 logs/
+
+# OS files - Windows garbage
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Docker volumes - runtime data, not source code
+docker-volumes/
+
+# Temporary files
+*.tmp
+*.temp
