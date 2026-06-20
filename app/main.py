@@ -8,6 +8,10 @@
 # RUN WITH: uvicorn app.main:app --reload
 # ─────────────────────────────────────────────────────────────
 
+from apscheduler.schedulers.background import BackgroundScheduler
+from app.database import SessionLocal
+from app.services.reconciliation import run_reconciliation
+
 from fastapi import FastAPI
 from app.config import settings
 from app.routers import payments, webhooks, gateways, analytics, reconciliation
@@ -42,3 +46,33 @@ def health_check():
 @app.get("/", tags=["health"])
 def root():
     return {"message": "PayFlow Payment Orchestration Layer is running", "docs": "/docs"}
+
+
+
+scheduler = BackgroundScheduler()
+
+
+def scheduled_reconciliation_job():
+    """Wraps run_reconciliation with its own DB session, since this
+    runs on a background thread, separate from any HTTP request."""
+    db = SessionLocal()
+    try:
+        run_reconciliation(db)
+    finally:
+        db.close()
+
+
+@app.on_event("startup")
+def start_scheduler():
+    scheduler.add_job(
+        scheduled_reconciliation_job,
+        "interval",
+        minutes=settings.RECONCILIATION_INTERVAL_MINUTES,
+        id="reconciliation_job",
+    )
+    scheduler.start()
+
+
+@app.on_event("shutdown")
+def stop_scheduler():
+    scheduler.shutdown()
