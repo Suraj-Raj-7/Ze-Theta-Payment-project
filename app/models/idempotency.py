@@ -20,52 +20,23 @@ from app.database import Base
 
 
 class IdempotencyKey(Base):
-    """
-    One row per unique payment request.
-    Expires after 24 hours — cleaned up by background job.
-    """
     __tablename__ = "idempotency_keys"
 
-    # The key itself IS the primary key — must be unique
-    # Client generates this (UUID format recommended)
+    # Composite primary key: (merchant_id, key) together must be
+    # unique, NOT key alone. This is what actually allows two
+    # different merchants to use the same key string independently
+    # (PDF FS-13 requirement) - the application logic alone can't
+    # provide this guarantee if the schema doesn't enforce it too.
     key = Column(String(255), primary_key=True)
-
-    # Merchant ID — keys are scoped per merchant
-    # Same key from two different merchants = two different payments
-    merchant_id = Column(String(255), nullable=False, default="default")
-
-    # SHA-256 hash of the request body
-    # If same key but different body → reject (tampering attempt)
+    merchant_id = Column(String(255), primary_key=True, default="default")
     request_hash = Column(String(64), nullable=False)
-
-    # Current status of this idempotency record
-    status = Column(
-        String(20),
-        nullable=False,
-        default="PROCESSING",
-        # CheckConstraint ensures only valid values stored at DB level
-    )
-
-    # HTTP status code of the response (stored for replay)
+    status = Column(String(20), nullable=False, default="PROCESSING")
     response_code = Column(Integer, nullable=True)
-
-    # Full response body (stored so we can replay it exactly)
     response_body = Column(JSONB, nullable=True)
-
-    created_at = Column(
-        DateTime(timezone=True),
-        server_default=func.now(),
-        nullable=False
-    )
-    updated_at = Column(
-        DateTime(timezone=True),
-        server_default=func.now(),
-        onupdate=func.now(),
-        nullable=False
-    )
-
-    # After 24 hours this key expires — background job deletes it
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     expires_at = Column(DateTime(timezone=True), nullable=False)
 
     def __repr__(self):
-        return f"<IdempotencyKey {self.key} status={self.status}>"
+        return f"<IdempotencyKey {self.merchant_id}:{self.key} status={self.status}>"
+    
