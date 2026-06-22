@@ -1,0 +1,35 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: payflow-postgres
+    environment:
+      POSTGRES_USER: payflow_user
+      POSTGRES_PASSWORD: payflow_pass
+      POSTGRES_DB: payflow_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payflow_user -d payflow_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    container_name: payflow-app
+    environment:
+      DATABASE_URL: postgresql://payflow_user:payflow_pass@postgres:5432/payflow_db
+      SECRET_KEY: docker-compose-secret-key
+      DEBUG: "False"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
