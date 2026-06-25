@@ -338,10 +338,12 @@ See `.env.example` in the repository for a template.
 | `GET` | `/api/v1/payments/{id}` | Get a payment's current status |
 
 ### Webhooks
-
 | Method | Endpoint | What It Does |
 |---|---|---|
-| `POST` | `/api/v1/webhooks/{gateway}` | Receive a payment notification from a gateway |
+| `POST` | `/api/v1/webhooks/razorpay` | Receive Razorpay payment notifications |
+| `POST` | `/api/v1/webhooks/stripe` | Receive Stripe payment notifications |
+| `POST` | `/api/v1/webhooks/payu` | Receive PayU payment notifications |
+| `POST` | `/api/v1/webhooks/upi` | Receive UPI payment notifications |
 
 ### Gateways
 
@@ -356,12 +358,9 @@ See `.env.example` in the repository for a template.
 | `GET` | `/api/v1/analytics` | View transaction statistics and success rates |
 
 ### Reconciliation
-
 | Method | Endpoint | What It Does |
 |---|---|---|
-| `POST` | `/api/v1/reconciliation/run` | Manually trigger a reconciliation run |
-| `GET` | `/api/v1/reconciliation/stale` | List transactions stuck in intermediate states |
-
+| `POST` | `/api/v1/reconciliation/trigger` | Manually trigger a reconciliation run |
 ---
 
 ## Key Features Explained
