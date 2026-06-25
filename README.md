@@ -8,7 +8,7 @@
   They make your repo look professional instantly.
 -->
 
-![Python](https://img.shields.io/badge/Python-3.11-blue)
+![Python](https://img.shields.io/badge/Python-3.13-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15-blue)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED)
@@ -74,7 +74,7 @@ This isn't a tutorial project — it solves real problems that production paymen
 
 | Technology | What It Does In This Project |
 |---|---|
-| **Python 3.11** | Main programming language |
+| **Python 3.13** | Main programming language |
 | **FastAPI** | Web framework — handles HTTP requests, auto-generates API documentation |
 | **PostgreSQL 15** | Database — stores all transactions, gateways, idempotency keys, webhooks |
 | **SQLAlchemy** | ORM (Object Relational Mapper) — lets us write Python instead of raw SQL |
@@ -255,7 +255,7 @@ To stop: press `Ctrl+C` in the terminal, then run `docker-compose down`
 
 ### Option 2: Local Development (without Docker)
 
-**Prerequisites:** Python 3.11+, PostgreSQL running locally.
+**Prerequisites:** Python 3.13+, PostgreSQL running locally.
 
 ```bash
 # Step 1: Clone the repository
