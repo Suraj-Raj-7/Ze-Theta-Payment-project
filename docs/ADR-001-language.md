@@ -29,7 +29,7 @@ was left open. The decision needed to consider:
 
 ## Decision
 
-**Language:** Python 3.11  
+**Language:** Python 3.13 
 **Web framework:** FastAPI  
 **ORM:** SQLAlchemy  
 **Validation:** Pydantic  
