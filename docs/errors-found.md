@@ -58,16 +58,6 @@ a record already exists, each branch must be deliberate about whether
 it's updating or inserting — falling through to the wrong path causes
 exactly this kind of primary-key collision.
 
-### Interview answer
-*"While testing the retry path of my idempotency service, I hit a
-database-level unique constraint violation. My code correctly identified
-a failed request should be retryable, but then reused the INSERT path
-meant for brand-new keys. Since the row already existed, Postgres
-rejected it. The fix was to explicitly update the existing row back
-to 'processing' instead of inserting a duplicate. It reinforced a
-habit: when a record might already exist, be explicit about whether
-you're updating or creating — don't let one code path accidentally
-serve both cases."*
 
 ---
 
@@ -105,15 +95,6 @@ safety mechanism rejects an operation, the first question should be:
 error message's actual content — not just reacting to its presence —
 is what separates productive debugging from chasing phantom bugs.
 
-### Interview answer
-*"When testing my webhook pipeline, I got a rejection that looked like
-a bug. But reading the message closely, it was my state machine
-correctly refusing an impossible transition — I'd set up test data in
-a state that could never realistically receive that webhook. Rather
-than weakening the validation to make the test pass, I fixed the test
-to reflect a realistic transaction lifecycle. It was a reminder that
-a rejection from a safety mechanism is often the system working as
-intended."*
 
 ---
 
@@ -172,16 +153,6 @@ audit logs, diffs, undo systems, and reconciliation are all common
 places this surfaces. Fix: snapshot the value at the moment you need
 it, before calling anything that might change it.
 
-### Interview answer
-*"My reconciliation log said a transaction 'was CAPTURED, gateway
-reports CAPTURED' — identical values — even though a real correction
-had just been applied. I traced it to reading the transaction's status
-after my state machine had already mutated the same object in place,
-so the 'before' value I was logging was actually the 'after' value.
-Fixed by capturing the original state into its own variable right
-before the mutating call. It's a pattern I now watch for any time
-I'm building before/after reporting around an object that gets
-mutated rather than replaced."*
 
 ---
 

@@ -1,0 +1,537 @@
+openapi: "3.0.3"
+
+# What is this file?
+# OpenAPI (also called Swagger) is a standard format for describing REST APIs.
+# This file documents every endpoint in PayFlow — what URLs exist, what data
+# they accept, and what they return. Tools like Swagger UI render this as
+# interactive documentation automatically.
+#
+# FastAPI already auto-generates this from your Pydantic schemas at /docs.
+# This file is a hand-written version for the docs/ folder — useful for
+# sharing with teams or submitting as part of a spec review.
+
+info:
+  title: PayFlow Payment Orchestration API
+  version: "1.0.0"
+  description: |
+    Payment orchestration layer with multi-gateway routing, automatic failover,
+    idempotency protection, webhook processing, and background reconciliation.
+
+    All amounts are in **paise** (smallest INR unit). ₹450.00 = 45000 paise.
+
+servers:
+  - url: http://localhost:8000
+    description: Local development (docker-compose up)
+
+tags:
+  - name: payments
+    description: Create and manage payment transactions
+  - name: webhooks
+    description: Receive asynchronous notifications from payment gateways
+  - name: gateways
+    description: View gateway health and routing scores
+  - name: analytics
+    description: Transaction statistics and success rates
+  - name: reconciliation
+    description: Detect and correct mismatched transaction states
+  - name: health
+    description: System health check
+
+paths:
+
+  # ─────────────────────────────────────────────────────────
+  # PAYMENTS
+  # ─────────────────────────────────────────────────────────
+
+  /api/v1/payments:
+    post:
+      tags: [payments]
+      summary: Create a new payment
+      description: |
+        Creates a payment, routes it to the best available gateway,
+        and returns the result. Idempotency-protected — sending the
+        same idempotency_key twice returns the original response
+        without creating a duplicate charge.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentCreateRequest'
+            example:
+              merchant_order_id: "ORDER-2024-001"
+              amount: 45000
+              currency: "INR"
+              payment_method: "upi"
+              idempotency_key: "idem-a1b2c3d4e5f6"
+      responses:
+        '201':
+          description: Payment created and routed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentResponse'
+        '409':
+          description: Request already in progress (duplicate idempotency key)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/payments/{payment_id}:
+    get:
+      tags: [payments]
+      summary: Get payment status
+      parameters:
+        - name: payment_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Payment found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentResponse'
+        '404':
+          description: Payment not found
+
+  /api/v1/payments/{payment_id}/timeline:
+    get:
+      tags: [payments]
+      summary: Get full state history of a payment
+      description: Returns every state transition this payment has gone through, in order.
+      parameters:
+        - name: payment_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Full state timeline
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TimelineResponse'
+
+  /api/v1/payments/{payment_id}/capture:
+    post:
+      tags: [payments]
+      summary: Capture an authorised payment
+      description: |
+        Moves a payment from AUTHORISED to CAPTURED (funds collected).
+        Only valid if the payment is currently in AUTHORISED state.
+      parameters:
+        - name: payment_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CaptureRequest'
+      responses:
+        '200':
+          description: Payment captured successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentResponse'
+        '409':
+          description: Invalid state transition (payment not in AUTHORISED state)
+
+  /api/v1/payments/{payment_id}/refund:
+    post:
+      tags: [payments]
+      summary: Refund a captured payment
+      description: |
+        Initiates a refund. If amount is omitted, full refund is processed.
+        Only valid if the payment is in CAPTURED or SETTLED state.
+      parameters:
+        - name: payment_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefundRequest'
+      responses:
+        '201':
+          description: Refund initiated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundResponse'
+        '409':
+          description: Invalid state transition
+
+  # ─────────────────────────────────────────────────────────
+  # WEBHOOKS
+  # ─────────────────────────────────────────────────────────
+
+  /api/v1/webhooks/razorpay:
+    post:
+      tags: [webhooks]
+      summary: Receive Razorpay webhook
+      description: |
+        Signature verified via X-Razorpay-Signature header (HMAC-SHA256).
+        Deduplicated by event_id. Applies state transition if valid.
+      parameters:
+        - name: X-Razorpay-Signature
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Webhook processed, duplicated ignored, or transition rejected
+        '401':
+          description: Invalid signature
+
+  /api/v1/webhooks/stripe:
+    post:
+      tags: [webhooks]
+      summary: Receive Stripe webhook
+      parameters:
+        - name: Stripe-Signature
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Webhook processed
+        '401':
+          description: Invalid signature
+
+  /api/v1/webhooks/payu:
+    post:
+      tags: [webhooks]
+      summary: Receive PayU webhook
+      parameters:
+        - name: X-PayU-Signature
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Webhook processed
+        '401':
+          description: Invalid signature
+
+  /api/v1/webhooks/upi:
+    post:
+      tags: [webhooks]
+      summary: Receive UPI webhook
+      parameters:
+        - name: X-UPI-Signature
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Webhook processed
+        '401':
+          description: Invalid signature
+
+  # ─────────────────────────────────────────────────────────
+  # GATEWAYS
+  # ─────────────────────────────────────────────────────────
+
+  /api/v1/gateways:
+    get:
+      tags: [gateways]
+      summary: List all gateways and their circuit breaker state
+      responses:
+        '200':
+          description: List of gateways
+          content:
+            application/json:
+              example:
+                - name: razorpay
+                  circuit_state: CLOSED
+                - name: stripe
+                  circuit_state: CLOSED
+                - name: payu
+                  circuit_state: CLOSED
+                - name: upi
+                  circuit_state: CLOSED
+
+  /api/v1/gateways/{name}/health:
+    get:
+      tags: [gateways]
+      summary: Get health metrics for a specific gateway
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [razorpay, stripe, payu, upi]
+      responses:
+        '200':
+          description: Gateway health snapshot
+          content:
+            application/json:
+              example:
+                gateway: razorpay
+                success_rate: 0.97
+                p95_latency_ms: 312.4
+                total_requests: 100
+                circuit_state: CLOSED
+        '404':
+          description: Unknown gateway
+
+  /api/v1/gateways/routing/scores:
+    get:
+      tags: [gateways]
+      summary: Show current routing scores for all gateways
+      parameters:
+        - name: payment_method
+          in: query
+          schema:
+            type: string
+            default: upi
+        - name: amount
+          in: query
+          schema:
+            type: integer
+            default: 10000
+      responses:
+        '200':
+          description: Sorted gateway scores
+          content:
+            application/json:
+              example:
+                - gateway: upi
+                  score: 0.8750
+                  circuit_state: CLOSED
+                - gateway: payu
+                  score: 0.6230
+                  circuit_state: CLOSED
+
+  # ─────────────────────────────────────────────────────────
+  # ANALYTICS
+  # ─────────────────────────────────────────────────────────
+
+  /api/v1/analytics/success-rate:
+    get:
+      tags: [analytics]
+      summary: Overall payment success rate
+      responses:
+        '200':
+          description: Success rate statistics
+          content:
+            application/json:
+              example:
+                total_transactions: 150
+                captured: 142
+                success_rate: 0.9467
+
+  /api/v1/analytics/volume:
+    get:
+      tags: [analytics]
+      summary: Transaction volume broken down by gateway
+      responses:
+        '200':
+          description: Volume per gateway
+          content:
+            application/json:
+              example:
+                - gateway: upi
+                  count: 89
+                - gateway: razorpay
+                  count: 45
+                - gateway: payu
+                  count: 16
+
+  # ─────────────────────────────────────────────────────────
+  # RECONCILIATION
+  # ─────────────────────────────────────────────────────────
+
+  /api/v1/reconciliation/trigger:
+    post:
+      tags: [reconciliation]
+      summary: Manually trigger a reconciliation run
+      description: |
+        Finds transactions stuck in AUTH_INITIATED or CAPTURE_INITIATED
+        for more than 5 minutes, polls each gateway for current status,
+        and corrects any mismatches. Also runs automatically every 15
+        minutes via APScheduler.
+      responses:
+        '200':
+          description: Reconciliation summary
+          content:
+            application/json:
+              example:
+                checked: 3
+                confirmed_consistent: 2
+                corrected: 1
+                anomalies: 0
+                details:
+                  - transaction_id: "uuid-here"
+                    result: corrected
+                    previous_state: CAPTURE_INITIATED
+                    new_state: CAPTURED
+
+  # ─────────────────────────────────────────────────────────
+  # HEALTH
+  # ─────────────────────────────────────────────────────────
+
+  /api/v1/health:
+    get:
+      tags: [health]
+      summary: System health check
+      responses:
+        '200':
+          description: System is healthy
+          content:
+            application/json:
+              example:
+                status: healthy
+                service: PayFlow Payment Orchestration Layer
+                version: "1.0.0"
+
+# ─────────────────────────────────────────────────────────
+# REUSABLE SCHEMAS
+# ─────────────────────────────────────────────────────────
+
+components:
+  schemas:
+
+    PaymentCreateRequest:
+      type: object
+      required: [merchant_order_id, amount, payment_method, idempotency_key]
+      properties:
+        merchant_order_id:
+          type: string
+          description: Your own order reference ID
+        amount:
+          type: integer
+          minimum: 1
+          description: Amount in paise. ₹450 = 45000
+        currency:
+          type: string
+          default: INR
+        payment_method:
+          type: string
+          enum: [upi, card, netbanking, wallet]
+        idempotency_key:
+          type: string
+          description: Unique key for this payment attempt. Same key = same result, no duplicate charge.
+
+    PaymentResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        merchant_order_id:
+          type: string
+        amount:
+          type: integer
+        currency:
+          type: string
+        status:
+          type: string
+          description: Current state machine status
+        gateway:
+          type: string
+          nullable: true
+        gateway_payment_id:
+          type: string
+          nullable: true
+        attempt_count:
+          type: integer
+          description: How many gateways were tried before success or final failure
+        failure_reason:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    CaptureRequest:
+      type: object
+      properties:
+        amount:
+          type: integer
+          nullable: true
+          description: Amount to capture in paise. Omit to capture full authorised amount.
+
+    RefundRequest:
+      type: object
+      properties:
+        amount:
+          type: integer
+          nullable: true
+          description: Amount to refund in paise. Omit for full refund.
+        reason:
+          type: string
+          nullable: true
+
+    RefundResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        transaction_id:
+          type: string
+          format: uuid
+        amount:
+          type: integer
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    TimelineResponse:
+      type: object
+      properties:
+        transaction_id:
+          type: string
+          format: uuid
+        current_status:
+          type: string
+        history:
+          type: array
+          items:
+            type: object
+            properties:
+              from_state:
+                type: string
+                nullable: true
+              to_state:
+                type: string
+              event:
+                type: string
+              created_at:
+                type: string
+                format: date-time
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
