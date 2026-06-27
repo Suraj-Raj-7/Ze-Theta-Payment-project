@@ -42,38 +42,19 @@ for all four gateways, including PayU, which is correct.
 **Location:** Section A3.2 — Scoring Formula
 
 **What the spec says:**
-```
-NormalizedLatency = (p95_latency - min_latency) / (max_latency - min_latency)
-```
+The scoring formula in Section A3.2 states:
+`NormalizedLatency = (p95_latency - min_latency) / (max_latency - min_latency)`
 
-**What is actually correct:**
-This formula as stated computes a value where a **higher latency produces a higher
-normalised score** (0 = fastest, 1 = slowest). The spec then uses it as:
+**What is actually wrong:**
+The spec never mentions that this formula produces a **division by zero** when all
+gateways have identical latency — which happens constantly in test environments
+where all mocks respond instantly. Any student who copies this formula verbatim
+will hit a ZeroDivisionError in their very first test run with a fresh system.
+The spec presents this as a complete, production-ready formula but it is
+mathematically broken without the guard clause.
 
-```
-(W_latency * (1 - NormalizedLatency(gateway)))
-```
-
-So the formula and its usage are internally consistent. However, the error is that
-this normalisation formula **breaks entirely when all gateways have the same
-latency** — the denominator becomes zero, producing a division-by-zero error.
-
-A production implementation must guard against this:
-```python
-latency_range = max_latency - min_latency
-if latency_range == 0:
-    latency_score = 1.0  # all gateways equally fast, neutral score
-else:
-    latency_score = 1 - ((gateway_latency - min_latency) / latency_range)
-```
-
-The spec omits this guard entirely. A student who copies the formula verbatim will
-get a `ZeroDivisionError` the first time they test with only one gateway or with
-gateways that have identical latency (which happens in test environments where all
-mocks return instantly).
-
-**Our implementation:** `app/services/router.py` includes the zero-division guard on
-all three normalised factors (latency, cost, success rate).
+**Our implementation:** `app/services/router.py` adds `max(range, 1)` for all three
+normalised factors to prevent this crash.
 
 ---
 
