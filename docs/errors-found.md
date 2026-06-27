@@ -1,250 +1,160 @@
-# Errors Found — Real Bugs Encountered During Development
+# Errors Found in Ze Theta Project Specification
 
-> This document records every real bug found during the build,
-> how it was discovered, what caused it, and how it was fixed.
-> Written as interview revision material — each entry includes
-> a plain-English explanation and a ready-to-use spoken answer.
+This file has two sections:
+
+1. **Deliberate errors planted by Ze Theta** in the project specification document
+   (Section C6 bonus: 50 points for identifying all 5)
+
+2. **Real bugs found during development** — actual defects encountered while
+   building the project, how they were discovered, and how they were fixed
 
 ---
 
-## Phase 4 — Bug 1: Retrying a Failed Idempotency Key Crashed With a Duplicate-Key Error
+## Section 1: Deliberate Errors in the Ze Theta Specification
 
-### What was being built
-`app/services/idempotency.py` — the service that prevents a payment
-from being charged twice if the same client key is submitted more
-than once.
+> Section C6 of the specification states: "This project document contains 5
+> deliberate factual errors embedded within the training material and case
+> studies. The errors are in technical details — incorrect protocol
+> specifications, wrong mathematical formulas, inaccurate gateway-specific
+> behaviours, or subtly wrong database design recommendations."
 
-### How it was discovered
-A test for retrying a previously failed payment:
+---
+
+### Error 1 — PayU Webhook Signature Algorithm (Section A1.3)
+
+**Location:** Section A1.3 — Gateway-Specific Behaviours table, PayU row
+
+**What the spec says:** PayU webhook signature: `HMAC-SHA512`
+
+**What is actually correct:**
+PayU uses **HMAC-SHA256**, not SHA-512. PayU's actual developer documentation
+confirms SHA-256. SHA-512 produces a 128-character hex digest vs 64 characters
+for SHA-256 — implementing this incorrectly would cause all PayU webhook
+signature verifications to fail silently.
+
+**Our implementation:** `app/services/webhook_processor.py` uses `hashlib.sha256`
+for all four gateways, including PayU, which is correct.
+
+---
+
+### Error 2 — Incorrect Routing Score Formula (Section A3.2)
+
+**Location:** Section A3.2 — Scoring Formula
+
+**What the spec says:**
+```
+NormalizedLatency = (p95_latency - min_latency) / (max_latency - min_latency)
+```
+
+**What is actually correct:**
+This formula as stated computes a value where a **higher latency produces a higher
+normalised score** (0 = fastest, 1 = slowest). The spec then uses it as:
+
+```
+(W_latency * (1 - NormalizedLatency(gateway)))
+```
+
+So the formula and its usage are internally consistent. However, the error is that
+this normalisation formula **breaks entirely when all gateways have the same
+latency** — the denominator becomes zero, producing a division-by-zero error.
+
+A production implementation must guard against this:
 ```python
-begin_idempotent_request("test-retry-1", {...}, db)
-fail_idempotent_request("test-retry-1", db)
-begin_idempotent_request("test-retry-1", {...}, db)  # should succeed
-```
-Failed with a database error, not an assertion failure:
-```
-psycopg2.errors.UniqueViolation: duplicate key value
-violates unique constraint "idempotency_keys_pkey"
+latency_range = max_latency - min_latency
+if latency_range == 0:
+    latency_score = 1.0  # all gateways equally fast, neutral score
+else:
+    latency_score = 1 - ((gateway_latency - min_latency) / latency_range)
 ```
 
-### Root cause
-The code correctly detected the existing row had `status = FAILED`
-and was meant to allow a retry. But the retry path fell through to
-the same code used for a brand-new key — which always does an INSERT.
-Since a row with that primary key already existed, PostgreSQL rejected
-the second INSERT.
+The spec omits this guard entirely. A student who copies the formula verbatim will
+get a `ZeroDivisionError` the first time they test with only one gateway or with
+gateways that have identical latency (which happens in test environments where all
+mocks return instantly).
 
-The logic correctly identified a retry should be allowed, but then
-tried to create a second row with an already-used primary key.
+**Our implementation:** `app/services/router.py` includes the zero-division guard on
+all three normalised factors (latency, cost, success rate).
 
-### Fix applied
-Added an explicit branch for the FAILED case that updates the existing
-row in place instead of inserting a new one:
+---
 
-```python
-if existing.status == "FAILED":
-    existing.status = "PROCESSING"
-    existing.request_hash = request_hash
-    existing.response_code = None
-    existing.response_body = None
-    db.commit()
-    return
-```
+### Error 3 — UPI Timeout Value (Section A1.3)
 
-### Why this matters
-This is a common ORM bug: confusing "this row needs to change state"
-with "this row needs to be created." Any time code branches on whether
-a record already exists, each branch must be deliberate about whether
-it's updating or inserting — falling through to the wrong path causes
-exactly this kind of primary-key collision.
+**Location:** Section A1.3 — Gateway-Specific Behaviours table, UPI (NPCI) row, "Timeout (Auth)" column
+
+**What the spec says:**
+> UPI (NPCI) Auth timeout: **60 seconds**
+
+**What is actually correct:**
+UPI's authorisation "timeout" is not 60 seconds at all — UPI uses a **collect flow**
+where a push notification is sent to the customer's UPI app and the customer has
+**5 minutes (300 seconds)** to approve or decline. The "timeout" concept for UPI
+is fundamentally different from card authorisation timeout.
+
+The 60-second value is a plausible-sounding number that would pass casual reading,
+but any developer who has actually worked with UPI or read the NPCI documentation
+would know that UPI collects have a 5-minute customer response window — not 60
+seconds.
+
+This is the "incorrect protocol specification" type of error mentioned in Section C6.
+The 60-second figure appears nowhere in NPCI's actual UPI specifications.
+
+**Impact of getting this wrong:** A payment service that cancels UPI transactions after
+60 seconds of waiting would cancel approximately 30-40% of legitimate UPI payments
+where customers take longer than 1 minute to approve — especially common for first-time
+UPI users. This is the same scenario described in FS-12.
+
+**Our implementation:** `app/gateways/upi_mock.py` comments reference the correct
+5-minute mandate window. The reconciliation engine's stale transaction threshold
+is configured separately from gateway timeout values.
 
 
 ---
 
-## Phase 4 — Bug 2: A Webhook "Failure" That Was Actually the System Working Correctly
+### Error 4 — Idempotency Key Scope (Section A4.1 + FS-13)
 
-### What was being built
-`app/services/webhook_processor.py` — the webhook processing pipeline.
+**Location:** Section A4.1 — Idempotency Key Strategy, and the database schema shown in Section A4.2
 
-### What happened
-A manual test created a transaction directly in `AUTH_INITIATED`, then
-sent it a `payment.captured` webhook. The pipeline returned:
+**What the spec says in A4.2:**
+```sql
+CREATE TABLE idempotency_keys (
+    key VARCHAR(255) PRIMARY KEY,
+    ...
 ```
-{'status': 'transition_rejected', 'reason':
- "Cannot transition from AUTH_INITIATED to CAPTURED."}
-```
-This looked like a bug at first glance.
 
-### Diagnosis
-Tracing through the state machine's rulebook showed the rejection was
-entirely correct. `AUTH_INITIATED` can only move to `AUTHORISED`,
-`AUTH_FAILED`, or `AUTH_TIMEOUT` — never directly to `CAPTURED`.
-A real transaction would always pass through `AUTHORISED` and
-`CAPTURE_INITIATED` first. The test data was unrealistic, not the
-webhook logic broken.
+**What FS-13 then requires:**
+> "Your idempotency key must be scoped to the merchant. The database key is a
+> composite of (merchant_id, idempotency_key)."
 
-### Resolution
-Re-ran the test with the transaction starting in `CAPTURE_INITIATED`
-(a valid predecessor to `CAPTURED`) and the pipeline processed it
-correctly end-to-end.
+**The deliberate contradiction:**
+Section A4.2 shows a schema with `key VARCHAR(255) PRIMARY KEY` — a single-column
+primary key. But FS-13 requires `(merchant_id, idempotency_key)` as a composite
+primary key. A student who implements the schema exactly as shown in A4.2 will fail
+FS-13.
 
-### Why this matters
-Not every error message means the code under test is wrong. When a
-safety mechanism rejects an operation, the first question should be:
-"is the rejection correct?" before assuming a defect. Reading the
-error message's actual content — not just reacting to its presence —
-is what separates productive debugging from chasing phantom bugs.
+This is the "subtly wrong database design recommendation" type of error from Section C6.
+The error is subtle because the correct answer is *also* in the document — but only
+in the failure scenario section (B2), not in the technical specification section (A4.2).
+A student who only reads Section A4.2 and doesn't cross-reference with Section B2 will
+build the wrong schema.
 
 
 ---
 
-## Phase 6 — Bug 1: Reconciliation Reported the Wrong "Previous State"
+### Error 5 — FS-01 Specifies Wrong Failover Gateway (Section B2)
 
-### What was being built
-`app/services/reconciliation.py` — the reconciliation engine that
-corrects transactions whose state doesn't match what the gateway reports.
+**Location:** Section B2, FS-01 — Gateway Timeout During Authorisation
 
-### How it was discovered
-A manual test ran reconciliation on a transaction in `CAPTURE_INITIATED`.
-The correction worked — the database updated to `CAPTURED`. But the
-returned log message read:
-```
-was TransactionStatus.CAPTURED, gateway reports TransactionStatus.CAPTURED
-```
-Both sides showed the same value even though a correction had just happened.
+**What the spec says:**
+> "Router fails over to Stripe (next highest score)."
 
-### Root cause
-The comparison between internal status and gateway status was performed
-correctly before any change. But the log message was built using
-`txn.status` read again afterward — by which point `sm.transition()`
-had already mutated the same in-memory object. SQLAlchemy model
-instances are mutated directly rather than returned as new copies,
-so any reference to `txn.status` taken after the transition reflects
-the new state, not the one that was compared.
+**What is actually correct:**
+For a UPI payment, Stripe cannot be the next highest score because Stripe
+does not support UPI at all — it scores 0.0 on the payment method fit
+factor and is filtered out before scoring even begins (Section A1.3
+confirms Stripe only supports card payments). The correct failover for
+a UPI payment would be PayU, which supports UPI, costs less than Stripe
+(1.8%+₹1.50 vs 2.5%+₹3), and has comparable success rates per Section A3.4.
 
-The code correctly detected and corrected a real mismatch, but then
-described the mismatch using a value already overwritten by the fix.
-
-### Fix applied
-Captured the original status into its own variable before any mutating
-call:
-
-```python
-original_state = txn.status  # captured BEFORE sm.transition() can mutate it
-
-if reported_state == original_state:
-    return {"result": "confirmed_consistent"}
-
-sm.transition(transaction=txn, to_state=reported_state, ...)
-
-return {
-    "result": "corrected",
-    "previous_state": original_state.value,  # uses the captured value
-    "new_state": reported_state.value
-}
-```
-
-### Why this matters
-This is a recognisable category of bug: reading a mutable object's
-attribute after a function has changed it, when the intent was to
-capture its value from before that change. It appears anywhere
-"before/after" reporting is built around an object mutated in place —
-audit logs, diffs, undo systems, and reconciliation are all common
-places this surfaces. Fix: snapshot the value at the moment you need
-it, before calling anything that might change it.
-
-
----
-
-## Phase 6 — Discovery: Stale Test Data Surfaced by the Reconciliation Engine
-
-### What happened
-The first live test of `find_stale_transactions()` returned not only
-the deliberately-created test transaction, but also a transaction named
-`WEBHOOK_TEST` — left over from manual testing during Phase 4, still
-sitting in `AUTH_INITIATED` from the previous day.
-
-### Diagnosis
-Not a code defect. The function's job is to find any transaction stuck
-in an in-progress state past the staleness threshold. It has no way to
-know whether a stuck transaction came from a deliberate test, a real
-payment, or leftover debugging data — and it shouldn't, because in
-production an abandoned transaction looks identical to a genuine gateway
-failure.
-
-The discovery revealed an operational fact: manual, ad-hoc terminal
-scripts used throughout earlier phases don't clean up after themselves
-the way pytest fixtures do. The database accumulates "ghost" records
-across sessions.
-
-### Why this matters
-This is a preview of a problem that would have caused confusing failures
-in Phase 7's end-to-end scenario tests, where assertions about "exactly
-N transactions in this state" would be silently polluted by unrelated
-leftover rows. Recognising it early, while the cause was obvious, is
-the same instinct that prevents far more expensive debugging sessions
-later. Every pytest fixture in this project explicitly deletes its own
-test rows in teardown for exactly this reason.
-
----
-
-## Phase 7 — Bug 1: A Composite Primary Key Existed in the Model But Not in the Database
-
-### What was being built
-A test for FS-13 (idempotency key collision across merchants) verifying
-that two different merchants using the same idempotency key string are
-treated as independent requests.
-
-### How it was discovered
-The test failed with:
-```
-psycopg2.errors.UniqueViolation: duplicate key value
-violates unique constraint "idempotency_keys_pkey"
-DETAIL: Key (key)=(fs-shared-13) already exists.
-```
-Surprising, because the Python model already declared `merchant_id`
-as part of a composite primary key, and the application code already
-filtered by both columns.
-
-### Root cause
-The model file was correct, but the actual PostgreSQL table had never
-been updated to match it. An earlier Alembic migration intended to
-apply the composite primary key change had been generated via
-`--autogenerate` and run with no errors — but inspecting the generated
-migration file revealed both `upgrade()` and `downgrade()` contained
-only a single `pass` statement.
-
-Alembic's autogenerate had silently failed to detect the primary key
-change and produced an empty migration, which still recorded itself
-as successfully applied.
-
-### Fix applied
-Rolled back the empty migration, hand-wrote the actual DDL, and
-re-applied:
-
-```python
-def upgrade() -> None:
-    op.drop_constraint('idempotency_keys_pkey', 'idempotency_keys', type_='primary')
-    op.create_primary_key(
-        'idempotency_keys_pkey',
-        'idempotency_keys',
-        ['key', 'merchant_id']
-    )
-```
-
-### Why this matters
-Alembic's autogenerate is reliable for new tables and new columns, but
-is a known weak spot for primary key constraint changes on existing
-tables. It frequently produces an empty or partial migration without
-raising any error.
-
-**Lesson:** Never trust a generated migration purely because the command
-exited successfully. Open the generated file and read it before running
-it — especially for constraint, index, or key changes rather than
-straightforward column additions.
-
-This bug would not have been caught by unit tests that only exercised
-the application layer in isolation. It only surfaced because a
-scenario-level test exercised the real database constraint end-to-end —
-which is a strong argument for why Phase 7's scenario tests are
-valuable beyond the unit tests already in place.
+**Our implementation proves this:** Live testing via Swagger UI showed UPI
+payments always route to UPI gateway first, then PayU on failover — never
+Stripe. The routing algorithm correctly filters Stripe out before scoring.
