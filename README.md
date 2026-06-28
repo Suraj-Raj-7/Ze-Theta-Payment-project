@@ -203,8 +203,14 @@ Ze-Theta-Payment-project/
 │   └── versions/               # Each file = one change to the database schema
 │
 ├── docs/
-│   └── state-machine.md        # Documentation for the payment state machine
+│   ├── state-machine.md        # Payment state machine — all 23 states with Mermaid diagram
+│   ├── architecture.md         # System design — six core components and why each decision was made
+│   ├── routing-algorithm.md    # Routing scoring formula with worked example
+│   ├── api-specification.yaml  # OpenAPI 3.0 spec for all 23 endpoints
+│   ├── ADR-001-language.md     # Architecture Decision Record — why Python + FastAPI
+│   └── errors-found.md         # 5 deliberate spec errors identified
 │
+├── CHANGELOG.md                # Day-by-day log of everything built
 ├── Dockerfile                  # Instructions to build the app into a container
 ├── docker-compose.yml          # Starts the entire system (app + database) with one command
 ├── requirements.txt            # Python packages this project depends on
