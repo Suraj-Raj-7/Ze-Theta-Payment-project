@@ -222,17 +222,8 @@ Ze-Theta-Payment-project/
 
 ## How to Run This Project
 
-<!--
-  WHY THIS SECTION EXISTS:
-  Ze Theta's grader will run your project. So will anyone evaluating your
-  work. Clear instructions mean your project actually gets evaluated
-  instead of getting skipped because "it didn't work."
-  
-  We offer TWO options: Docker (recommended, works on any machine) and
-  local (for development). Docker is what Ze Theta uses.
--->
 
-### Option 1: Docker (Recommended — this is what Ze Theta uses)
+### Option 1: Docker (Recommended)
 
 **Prerequisites:** [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running.
 
